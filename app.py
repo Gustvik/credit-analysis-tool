@@ -4,8 +4,10 @@ import plotly.express as px
 import pandas as pd
 import sys
 import copy
+import os
 
-sys.path.insert(0, r"C:\credit_tool")
+sys.path.insert(0, os.path.dirname(__file__))
+
 
 from data.api_client import get_financial_data, get_company_info
 from analysis.credit_engine import calculate_ratios, credit_score
@@ -152,55 +154,65 @@ if side == "Enkeltselskap":
 
 elif side == "Portefølje":
     st.title("Porteføljeovervåking")
-    st.info("Last opp en CSV-fil med organisasjonsnumre")
-    uploaded = st.file_uploader("Last opp CSV (kolonne: org_nr)", type="csv")
+    
+    portfolio_path = os.path.join(os.path.dirname(__file__), "portfolio_1000.csv")
+    
+    if os.path.exists(portfolio_path):
+        result_df = pd.read_csv(portfolio_path)
+        result_df.columns = [
+            "Org.nr", "Navn", "Bransje", "Ansatte", "Omsetning MNOK",
+            "Netto margin %", "Egenkapital %", "Gjeldsgrad", "Likviditetsgrad",
+            "EBITDA margin %", "Driftsmargin %", "Rentedekningsgrad",
+            "Score", "Rating", "PD %", "Z-score", "Z-rating", "Risikoindikatorere"
+        ]
+        result_df = result_df.sort_values("Score")
 
-    if uploaded:
-        portfolio_df = pd.read_csv(uploaded)
-        if "org_nr" not in portfolio_df.columns:
-            st.error("CSV-filen må ha en kolonne som heter 'org_nr'")
-        else:
-            resultater = []
-            progress = st.progress(0)
-            for i, row in portfolio_df.iterrows():
-                org = str(row["org_nr"])
-                company = get_company_info(org)
-                financial = get_financial_data(org, years=1)
-                progress.progress((i + 1) / len(portfolio_df))
-                if "records" in financial and financial["records"]:
-                    ratios = calculate_ratios(financial["records"])
-                    siste = ratios[0]
-                    score = credit_score(siste)
-                    ml = predict_pd(siste)
-                    resultater.append({
-                        "Org.nr": org,
-                        "Navn": company.get("navn", "Ukjent"),
-                        "Bransje": company.get("naeringskode1", {}).get("beskrivelse", "")[:40],
-                        "Score": score["score"],
-                        "Rating": score["rating"],
-                        "PD %": ml["pd_percent"],
-                        "Z-score": ml["z_score"],
-                        "Egenkapitalandel %": siste["equity_ratio"],
-                        "Netto margin %": siste["net_margin"],
-                    })
+        st.subheader("Porteføljeoversikt – 1000 norske selskaper")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Antall selskaper", len(result_df))
+        col2.metric("Gjennomsnittlig score", f"{result_df['Score'].mean():.0f}")
+        col3.metric("Høy risiko (C/D)", len(result_df[result_df["Score"] < 50]))
+        col4.metric("Gjennomsnittlig PD", f"{result_df['PD %'].mean():.1f}%")
 
-            if resultater:
-                result_df = pd.DataFrame(resultater).sort_values("Score")
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Antall selskaper", len(result_df))
-                col2.metric("Gjennomsnittlig score", f"{result_df['Score'].mean():.0f}")
-                col3.metric("Høy risiko (C/D)", len(result_df[result_df["Score"] < 50]))
+        fig = go.Figure(go.Histogram(
+            x=result_df["Score"],
+            nbinsx=20,
+            marker_color="#2196F3"
+        ))
+        fig.update_layout(title="Scorefordeling – portefølje", height=350)
+        st.plotly_chart(fig, use_container_width=True)
 
-                fig = go.Figure(go.Bar(
-                    x=result_df["Navn"],
-                    y=result_df["Score"],
-                    marker_color=result_df["Score"].apply(
-                        lambda x: "green" if x >= 75 else "orange" if x >= 50 else "red"
-                    )
-                ))
-                fig.update_layout(title="Kredittskår per selskap", height=400)
-                st.plotly_chart(fig, use_container_width=True)
-                st.dataframe(result_df, use_container_width=True)
+        col1, col2 = st.columns(2)
+        with col1:
+            bransje_score = result_df.groupby("Bransje")["Score"].mean().sort_values().head(15)
+            fig2 = go.Figure(go.Bar(
+                x=bransje_score.values,
+                y=bransje_score.index,
+                orientation="h",
+                marker_color="#FF9800"
+            ))
+            fig2.update_layout(title="Gjennomsnittlig score per bransje", height=400)
+            st.plotly_chart(fig2, use_container_width=True)
+
+        with col2:
+            rating_counts = result_df["Rating"].value_counts()
+            fig3 = go.Figure(go.Pie(
+                labels=rating_counts.index,
+                values=rating_counts.values,
+                marker_colors=["#4CAF50", "#FFC107", "#FF9800", "#F44336"]
+            ))
+            fig3.update_layout(title="Ratingfordeling", height=400)
+            st.plotly_chart(fig3, use_container_width=True)
+
+        st.subheader("Høyrisiko-selskaper (C/D)")
+        høy_risiko = result_df[result_df["Score"] < 50][["Navn", "Bransje", "Score", "Rating", "PD %", "Z-score"]]
+        st.dataframe(høy_risiko, use_container_width=True)
+
+        st.subheader("Alle selskaper")
+        st.dataframe(result_df[["Navn", "Bransje", "Score", "Rating", "PD %", "Z-score", "Egenkapital %", "Netto margin %"]].head(100), use_container_width=True)
+    else:
+        st.error("portfolio_1000.csv ikke funnet")
+
 
 elif side == "ROE-kalkulator":
     st.title("ROE-kalkulator – Kredittportefølje")
